@@ -1,3 +1,4 @@
+using System.Reflection;
 using Elsa.Mediator.Contexts;
 using Elsa.Mediator.Contracts;
 using Elsa.Mediator.Middleware.Command.Contracts;
@@ -9,6 +10,12 @@ namespace Elsa.Mediator.Middleware.Command.Components;
 /// </summary>
 public class CommandHandlerInvokerMiddleware : ICommandMiddleware
 {
+    private static readonly MethodInfo _awaitOnGenericTaskMethod =
+        typeof(CommandHandlerInvokerMiddleware).GetMethod(
+            nameof(AwaitOnGenericTask),
+            BindingFlags.NonPublic | BindingFlags.Static
+        )!;
+
     private readonly CommandMiddlewareDelegate _next;
     private readonly IServiceProvider _serviceProvider;
     private readonly IEnumerable<ICommandHandler> _commandHandlers;
@@ -49,11 +56,27 @@ public class CommandHandlerInvokerMiddleware : ICommandMiddleware
         var task = executeMethodWithReturnType.Invoke(strategy, new object[] { strategyContext });
 
         // Get result of task.
-        var taskWithReturnType = typeof(Task<>).MakeGenericType(resultType);
-        var resultProperty = taskWithReturnType.GetProperty(nameof(Task<object>.Result))!;
-        context.Result = resultProperty.GetValue(task);
+        // Get result of task.
+        Task<object> resultingTask =
+            (Task<object>)
+                _awaitOnGenericTaskMethod
+                    .MakeGenericMethod(resultType)
+                    .Invoke(null, new object[] { task! })!;
+
+        context.Result = await resultingTask;
 
         // Invoke next middleware.
         await _next(context);
+    }
+
+    /// <summary>
+    /// Simple method used to convert Task<T> to Task<object> by awaiting it.
+    /// </summary>
+    /// <typeparam name="T"></typeparam>
+    /// <param name="task"></param>
+    /// <returns></returns>
+    private static async Task<object> AwaitOnGenericTask<T>(Task<T> task)
+    {
+        return await task;
     }
 }
